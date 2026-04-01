@@ -38,6 +38,32 @@ app.get('/health', async (req, res) => {
 // SSE Clients Management
 let clients = [];
 
+// Setup PostgreSQL Listen for scaling issue :)
+const setupListen = async () => {
+  const client = await pool.connect();
+  await client.query('LISTEN todo_alerts');
+
+  client.on('notification', (msg) => {
+    if (msg.channel === 'todo_alerts') {
+      const eventData = msg.payload;
+      clients.forEach(c => {
+        c.res.write(`event: todo_alert\n`);
+        c.res.write(`data: ${eventData}\n\n`);
+      });
+    }
+  });
+
+  client.on('error', (err) => {
+    console.error('Postgres listen error', err);
+    client.release();
+    setTimeout(setupListen, 5000);
+  });
+
+  console.log('Listening for PG notifications on canal: todo_alerts');
+};
+
+setupListen();
+
 app.get('/alerts', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -106,7 +132,7 @@ app.patch('/todos/:id', async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const fields = Object.keys(updates);
-  
+
   if (fields.length === 0) return res.status(400).json({ error: 'No fields provided' });
 
   const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
@@ -163,16 +189,15 @@ app.post('/todos/:id/notify', async (req, res) => {
       due_date: todo.due_date
     });
 
-    clients.forEach(c => {
-      c.res.write(`event: todo_alert\n`);
-      c.res.write(`data: ${eventData}\n\n`);
-    });
+    // Notify via Postgres for cross-instance scaling
+    await pool.query("SELECT pg_notify('todo_alerts', $1)", [eventData]);
 
-    res.json({ message: 'Alerte envoyée', listeners: clients.length });
+    res.json({ message: 'Alerte envoyée (Pub/Sub)', listeners: clients.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
