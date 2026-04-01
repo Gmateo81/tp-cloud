@@ -11,6 +11,11 @@ app.use(express.json());
 
 initDb();
 
+// Root Route
+app.get('/', (req, res) => {
+  res.send("<h1>Voici l'api todo de Gayrard Mateo</h1>");
+});
+
 // Health Check
 app.get('/health', async (req, res) => {
   try {
